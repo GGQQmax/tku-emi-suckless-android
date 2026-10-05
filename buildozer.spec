@@ -27,9 +27,7 @@ source.exclude_dirs = tests, bin, venv, .venv, .git, .userData
 # (str) Application versioning (method 1)
 version = 0.1
 
-# (list) Application requirements
-# comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,requests,beautifulsoup4,urllib3,chardet,certifi,flask
+requirements = python3,requests,beautifulsoup4,urllib3,chardet,certifi,bottle
 
 # (str) Supported orientation (one of landscape, sensorLandscape, portrait or all)
 orientation = portrait

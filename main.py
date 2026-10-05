@@ -470,10 +470,12 @@ try:
     HAVE_FLASK = True
 except ImportError:
     HAVE_FLASK = False
-    try:
-        from bottle import Bottle, request as bottle_request, response as bottle_response, static_file
-    except ImportError:
-        pass
+
+try:
+    from bottle import Bottle, request as bottle_request, response as bottle_response, static_file
+    HAVE_BOTTLE = True
+except ImportError:
+    HAVE_BOTTLE = False
 
 
 def create_app(api_instance=None):
@@ -575,75 +577,79 @@ def create_app(api_instance=None):
         def b_static(path):
             return static_file(path, root=GUI_DIR)
 
+        def b_json(data):
+            bottle_response.content_type = 'application/json'
+            return json.dumps(data)
+
         @b_app.route('/api/check_saved_session', method='GET')
         def b_check_saved_session():
-            return api_instance.check_saved_session()
+            return b_json(api_instance.check_saved_session())
 
         @b_app.route('/api/authenticate', method='POST')
         def b_authenticate():
             data = bottle_request.json or {}
-            return json.dumps(api_instance.authenticate(data.get('username', ''), data.get('password', '')))
+            return b_json(api_instance.authenticate(data.get('username', ''), data.get('password', '')))
 
         @b_app.route('/api/logout', method='POST')
         def b_logout():
-            return json.dumps(api_instance.logout())
+            return b_json(api_instance.logout())
 
         @b_app.route('/api/student_info', method='GET')
         def b_student_info():
             with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
-            return api_instance.student_info(withUpdate=with_update)
+            return b_json(api_instance.student_info(withUpdate=with_update))
 
         @b_app.route('/api/study_progress_info', method='GET')
         def b_study_progress_info():
             with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
-            return api_instance.study_progress_info(withUpdate=with_update)
+            return b_json(api_instance.study_progress_info(withUpdate=with_update))
 
         @b_app.route('/api/required_courses_and_graduation_credits', method='GET')
         def b_required_courses_and_graduation_credits():
             with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
-            return api_instance.required_courses_and_graduation_credits(withUpdate=with_update)
+            return b_json(api_instance.required_courses_and_graduation_credits(withUpdate=with_update))
 
         @b_app.route('/api/all_years_course_grades', method='GET')
         def b_all_years_course_grades():
             with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
-            return api_instance.all_years_course_grades(withUpdate=with_update)
+            return b_json(api_instance.all_years_course_grades(withUpdate=with_update))
 
         @b_app.route('/api/missing_required_courses', method='GET')
         def b_missing_required_courses():
             with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
-            return api_instance.missing_required_courses(withUpdate=with_update)
+            return b_json(api_instance.missing_required_courses(withUpdate=with_update))
 
         @b_app.route('/api/course_selection_by_course_code', method='GET')
         def b_course_selection_by_course_code():
             with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
-            return api_instance.course_selection_by_course_code(withUpdate=with_update)
+            return b_json(api_instance.course_selection_by_course_code(withUpdate=with_update))
 
         @b_app.route('/api/courses_we_have_this_semester', method='GET')
         def b_courses_we_have_this_semester():
             with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
-            return api_instance.courses_we_have_this_semester(withUpdate=with_update)
+            return b_json(api_instance.courses_we_have_this_semester(withUpdate=with_update))
 
         @b_app.route('/api/get_score', method='GET')
         def b_get_score():
-            return api_instance.get_score()
+            return b_json(api_instance.get_score())
 
         @b_app.route('/api/progress_on_graduation', method='GET')
         def b_progress_on_graduation():
-            return api_instance.progress_on_graduation()
+            return b_json(api_instance.progress_on_graduation())
 
         @b_app.route('/api/update_all_user_data', method='POST')
         def b_update_all_user_data():
-            return api_instance.update_all_user_data()
+            return b_json(api_instance.update_all_user_data())
 
         @b_app.route('/api/schedule_my_class', method='POST')
         def b_schedule_my_class():
             data = bottle_request.json or {}
-            return api_instance.schedule_my_class(data)
+            return b_json(api_instance.schedule_my_class(data))
 
         @b_app.route('/api/search_courses', method='POST')
         def b_search_courses():
             data = bottle_request.json or {}
-            return api_instance.search_courses(data)
+            return b_json(api_instance.search_courses(data))
 
         return b_app
 
