@@ -60,15 +60,17 @@ jobs:
             m4
         shell: bash
 
-      - name: Cache Buildozer Global Dependencies & Gradle
+      - name: Cache Buildozer Downloads & Gradle
         uses: actions/cache@v4
         with:
           path: |
-            ~/.buildozer
+            ~/.buildozer/cache
+            ~/.buildozer/android/platform/android-sdk
+            ~/.buildozer/android/platform/android-ndk-*
             ~/.gradle
-          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
+          key: buildozer-toolchain-v2-${{ runner.os }}
           restore-keys: |
-            buildozer-${{ runner.os }}-
+            buildozer-toolchain-v2-${{ runner.os }}
 
       - name: Install Python Dependencies
         run: |
