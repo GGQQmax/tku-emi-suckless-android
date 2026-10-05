@@ -52,7 +52,10 @@ jobs:
             libssl-dev \
             automake \
             autopoint \
-            gettext
+            gettext \
+            m4
+          # Initialize libtool macros
+          libtoolize --install --copy --force || true
         shell: bash
 
       - name: Cache Buildozer Global Dependencies & Gradle
