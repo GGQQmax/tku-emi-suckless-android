@@ -42,6 +42,7 @@ jobs:
             python3-virtualenv \
             autoconf \
             libtool \
+            libtool-bin \
             libltdl-dev \
             build-essential \
             ccache \
@@ -55,9 +56,13 @@ jobs:
             libssl-dev \
             automake \
             autopoint \
-            gettext
+            gettext \
+            m4
+          # Initialize libtool macros
+          libtoolize --install --copy --force || true
+          autoreconf --install --verbose || true
         shell: bash
-
+  
       - name: Cache Buildozer Global Dependencies & Gradle
         uses: actions/cache@v4
         with:

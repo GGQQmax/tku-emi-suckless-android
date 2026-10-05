@@ -60,7 +60,7 @@ To compile the APK locally, follow the [Buildozer Installation Guide](https://bu
 ```bash
 sudo apt update
 sudo apt install -y git zip unzip openjdk-17-jdk python3-pip python3-virtualenv \
-  autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
+  autoconf libtool libltdl-dev pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
   libtinfo6 cmake libffi-dev libssl-dev automake autopoint gettext
 ```
 
