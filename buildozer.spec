@@ -51,7 +51,7 @@ android.ndk_api = 21
 android.private_storage = True
 
 # (list) The Android architectures to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 
 # (bool) Android logcat filters to use
 #android.logcat_filters = *:S python:D
@@ -65,7 +65,7 @@ p4a.port = 5000
 [buildozer]
 
 # (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
-log_level = 0
+log_level = 2
 
 # (int) Display warning if buildozer is run as root (0 = False, 1 = True)
 warn_on_root = 1
