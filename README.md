@@ -1,4 +1,4 @@
-# TKU EMI Suckless (Android)
+# TKU EMI Suckless (Android) work in progress
 
 A lightweight Android and mobile/web client for Tamkang University (TKU) Educational Management Information System (EMIS).
 
