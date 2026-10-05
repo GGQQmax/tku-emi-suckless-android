@@ -1,66 +1,92 @@
-# TKU EMI Suckless
+# TKU EMI Suckless (Android)
 
-A lightweight desktop client for Tamkang University (TKU) Educational Management Information System (EMIS).
+A lightweight Android and mobile/web client for Tamkang University (TKU) Educational Management Information System (EMIS).
+
+Built with a local Python Flask service and an Android WebView bootstrap via Buildozer (`python-for-android`), this app provides a clean, responsive interface to manage and track your academic progress at TKU without the bloated web portal.
 
 ## Features
 
-- **Authentication**: Secure login to TKU EMIS account.
-- **Student Profile**: View student details and study progress.
+- **Authentication**: Secure single sign-on (SSO) login with local session caching.
+- **Student Profile**: View student details, department, and academic study progress.
 - **Graduation Tracker**: Calculate earned vs. required credits and track missing mandatory courses.
-- **Grade History**: View course grades across all academic years.
-- **Course Planner**: Search current semester courses and manage custom class schedules.
-- **Offline Caching**: Caches retrieved user data locally in `.userData/`.
+- **Grade History**: View comprehensive course grades across all academic years.
+- **Course Planner**: Search courses available this semester and manage custom class schedules.
+- **Android Internal Storage**: Stores session data and cached user data in the app's internal writable directory (`.userData/`).
 
-## Tech Stack
+## Architecture & Tech Stack
 
-- **Backend & Scraper**: Python (`requests`, `beautifulsoup4`)
-- **GUI Engine**: `pywebview` with HTML/CSS/JavaScript
-- **Packaging**: PyInstaller
+- **Backend**: Python 3, Flask, `requests`, `beautifulsoup4`
+- **Frontend**: Responsive HTML5, CSS3, JavaScript (REST API bridge via `fetch`)
+- **Android Runtime**: [Buildozer](https://buildozer.readthedocs.io/) & [python-for-android](https://python-for-android.readthedocs.io/) using `p4a.bootstrap = webview`
 
-## Prerequisites
+## Running Locally (Development / Web)
 
-### Linux
-System GTK and WebKit packages are required:
-Just pick any `webkit2-4.x` you have in your distro. They're mostly inter-compatible.
-- **Ubuntu/Debian**: `sudo apt install python3-gi gir1.2-webkit2-4.0` (or `gir1.2-webkit2-4.1`) 
-- **Fedora**: `sudo dnf install webkit2gtk3 python3-gobject`  
-- **Arch Linux**: `sudo pacman -S webkit2gtk`
+You can run and test the app locally in any modern desktop or mobile browser:
 
-### Windows
-- Microsoft Edge WebView2 (default on Windows 10/11)
-
-## Installation and Usage
-
-1. Clone the repository:
+1. **Clone the repository**:
    ```bash
-   git clone https://github.com/GGQQmaxweb/tku-emi-suckless.git
-   cd tku-emi-suckless
+   git clone https://github.com/GGQQmax/tku-emi-suckless-android.git
+   cd tku-emi-suckless-android
    ```
 
-2. Install Python dependencies:
+2. **Set up a virtual environment and install dependencies**:
    ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
-3. Launch the application:
+3. **Launch the local server**:
    ```bash
-   python main.py
+   python3 main.py
    ```
 
-## Building Executables
+4. **Open in browser**:
+   Navigate to [http://127.0.0.1:5000/](http://127.0.0.1:5000/).
 
-- **Linux**:
-  ```bash
-  pyinstaller tku-emi-suckless_light.spec
-  ```
-- **Windows**:
-  ```bash
-  pyinstaller --noconsole --onefile --name "tku-emi-suckless-Windows" --add-data "gui;gui" main.py
-  ```
-- **macOS**:
-  ```bash
-  pyinstaller --noconsole --onedir --name "tku-emi-suckless-macOS" --add-data "gui:gui" main.py
-  ```
+---
+
+## Building the Android APK
+
+### Automated GitHub Actions (Recommended)
+This repository includes a GitHub Actions workflow (`.github/workflows/android.yml`) that automatically builds the Android APK:
+- Every push to `main` or `master` compiles the debug APK and uploads it as a workflow artifact.
+- Pushing a version tag (`v*`) automatically builds and publishes the APK to GitHub Releases.
+
+### Building Locally with Buildozer
+To compile the APK locally, follow the [Buildozer Installation Guide](https://buildozer.readthedocs.io/en/latest/installation/):
+
+#### 1. System Dependencies (Ubuntu / Debian)
+```bash
+sudo apt update
+sudo apt install -y git zip unzip openjdk-17-jdk python3-pip python3-virtualenv \
+  autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
+  libtinfo6 cmake libffi-dev libssl-dev automake autopoint gettext
+```
+
+For **Fedora**:
+```bash
+sudo dnf install java-17-openjdk-devel git zip unzip autoconf automake libtool \
+  pkgconfig zlib-devel ncurses-devel cmake libffi-devel openssl-devel gettext-devel
+```
+
+#### 2. Install Buildozer & Cython
+```bash
+pip install --upgrade buildozer cython
+```
+
+#### 3. Build APK
+```bash
+# Build debug APK
+buildozer android debug
+
+# Build release APK
+buildozer android release
+```
+
+The compiled `.apk` will be output in the `bin/` directory.
+
+---
 
 ## License
 

@@ -37,6 +37,9 @@ orientation = portrait
 # (list) Permissions
 android.permissions = INTERNET
 
+# (bool) Automatically accept Android SDK licenses
+android.accept_sdk_license = True
+
 # (int) Target Android API, should be as high as possible.
 android.api = 33
 
