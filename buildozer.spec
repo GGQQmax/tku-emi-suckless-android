@@ -64,9 +64,6 @@ p4a.bootstrap = webview
 # (int) The port your local web application listens on
 p4a.port = 5000
 
-# (str) The URL to open in WebView upon launch (defaults to http://127.0.0.1:5000/)
-p4a.url = http://127.0.0.1:5000/
-
 [buildozer]
 
 # (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
