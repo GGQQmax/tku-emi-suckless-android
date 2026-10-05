@@ -1,54 +1,73 @@
 import os
 import sys
-
-# Ensure PyInstaller runtime loads bundled GTK/WebKit typelibs or system libraries
-if getattr(sys, 'frozen', False):
-    bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-    typelib_path = os.path.join(bundle_dir, 'gi_typelibs')
-    
-    paths = []
-    if os.path.exists(typelib_path):
-        paths.append(typelib_path)
-    
-    # Common system typelib paths on different Linux distributions (e.g. Fedora, Debian/Ubuntu, Arch)
-    system_paths = [
-        "/usr/lib64/girepository-1.0",
-        "/usr/lib/girepository-1.0",
-        "/usr/lib/x86_64-linux-gnu/girepository-1.0",
-        "/usr/lib/i386-linux-gnu/girepository-1.0"
-    ]
-    for p in system_paths:
-        if os.path.exists(p) and p not in paths:
-            paths.append(p)
-            
-    existing = os.environ.get('GI_TYPELIB_PATH')
-    if existing:
-        paths.append(existing)
-        
-    os.environ['GI_TYPELIB_PATH'] = os.pathsep.join(paths)
-
-import platform
-import subprocess
-import webview
 import json
-from functools import wraps
 import re
-import urllib.request
 import ssl
+import urllib.request
 import requests
 
 from emis_api.emis_api import EMISStudentAPI
 from emis_api.emis_auth_module import Authenticator
 
-SESSION_FILE = ".env"
+# Storage paths configuration
+def get_data_dir():
+    # 1. Android internal writable directories
+    for env_var in ['ANDROID_APP_PATH', 'ANDROID_PRIVATE']:
+        val = os.environ.get(env_var)
+        if val and os.path.isdir(val):
+            return val
+    # 2. android.storage if available
+    try:
+        from android.storage import app_storage_path
+        val = app_storage_path()
+        if val and os.path.isdir(val):
+            return val
+    except Exception:
+        pass
+    # 3. Fallback to app directory for desktop/local execution
+    return os.path.dirname(os.path.abspath(__file__))
+
+DATA_DIR = get_data_dir()
+SESSION_FILE = os.path.join(DATA_DIR, ".env")
+USERSTORAGE = os.path.join(DATA_DIR, ".userData")
 
 AUTH = None
 API = None
 
-USERSTORAGE = ".userData"
+def get_storage_data(fileName: str):
+    data = {}
+    filepath = os.path.join(USERSTORAGE, fileName)
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"Error reading storage {fileName}: {e}")
+    return data
+
+def save_storage_data(fileName: str, data):
+    if not os.path.exists(USERSTORAGE):
+        os.makedirs(USERSTORAGE, exist_ok=True)
+    filepath = os.path.join(USERSTORAGE, fileName)
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def normalize_schedule(schedule):
+    normalized = []
+    for item in schedule:
+        parts = [p.strip() for p in item.split("/")]
+        if len(parts) >= 3:
+            day, periods, room = parts[:3]
+            # Pad every period to 2 digits
+            periods = ",".join(f"{int(p):02d}" for p in periods.split(","))
+            # Normalize room spacing
+            room = re.sub(r"([A-Z])\s+(\d+)", r"\1  \2", room)
+            item = f"{day} / {periods} / {room}"
+        normalized.append(item)
+    return normalized
+
 
 class UI_Api:
-
     API_MAP = {
         "student_info": (
             "student_info.json",
@@ -80,15 +99,17 @@ class UI_Api:
         )
     }
 
+    @property
+    def courses(self):
+        return self.courses_we_have_this_semester() or []
+
     def _get_api(self):
         global AUTH, API
         if AUTH is None or API is None:
             self.auth_login()
-        try:
-            return API
-        except Exception:
-            self.auth_login()
-            return API
+        if API is None:
+            raise RuntimeError("Authentication required")
+        return API
 
     def _data(self, filename, api_method, withUpdate=False):
         if withUpdate:
@@ -98,143 +119,116 @@ class UI_Api:
             return data
 
         return get_storage_data(filename)
-    
+
     def progress_on_graduation(self):
         """
         Return overall graduation progress percentage.
         """
         data = self.get_score()
-
+        total_required = data.get("total_required", 0)
+        total_credit = data.get("total_credit", 0)
+        if total_required == 0:
+            return {"total_percent": 0}
         return {
             "total_percent": round(
-                data["total_credit"] / data["total_required"] * 100,
+                total_credit / total_required * 100,
                 2
             )
         }
 
     def get_score(self):
-        department = self.student_info()["department"]
+        student_info = self.student_info() or {}
+        department = student_info.get("department", "")
 
         AllGrades = self.all_years_course_grades()
         requiredCourses = self.required_courses_and_graduation_credits()
 
-        if AllGrades is None or requiredCourses is None:
+        if AllGrades is None or requiredCourses is None or not AllGrades:
             AllGrades = self.all_years_course_grades(withUpdate=True)
             requiredCourses = self.required_courses_and_graduation_credits(withUpdate=True)
 
-        courses = AllGrades["courses"]
+        courses = AllGrades.get("courses", []) if isinstance(AllGrades, dict) else []
 
         # =========================
         # 必修
         # =========================
         requiredScore = 0
-
         for course in courses:
             if (
-                course["status"] == "passed"
-                and course["requirement_type"] == "必修Required"
+                course.get("status") == "passed"
+                and course.get("requirement_type") == "必修Required"
             ):
-                requiredScore += course["credits_up"]
+                requiredScore += course.get("credits_up", 0)
 
         # =========================
         # 本系選修
         # =========================
         electiveScore = 0
-
         for course in courses:
             if (
-                course["status"] == "passed"
-                and course["requirement_type"] == "選修Elective"
-                and department in course["specialization"]
+                course.get("status") == "passed"
+                and course.get("requirement_type") == "選修Elective"
+                and department
+                and department in course.get("specialization", "")
             ):
-                electiveScore += course["credits_up"]
+                electiveScore += course.get("credits_up", 0)
 
         # =========================
         # 其他選修
         # =========================
         otherElectiveScore = 0
-
         for course in courses:
             if (
-                course["status"] == "passed"
-                and course["requirement_type"] == "選修Elective"
-                and department not in course["specialization"]
+                course.get("status") == "passed"
+                and course.get("requirement_type") == "選修Elective"
+                and (not department or department not in course.get("specialization", ""))
             ):
-                otherElectiveScore += course["credits_up"]
+                otherElectiveScore += course.get("credits_up", 0)
 
         # =========================
         # 體育
         # 體育有學分，但是不計入畢業學分
         # =========================
         score_pe_class = 0
-
         for course in courses:
             if (
-                course["status"] == "passed"
-                and "體育" in course["specialization"]
+                course.get("status") == "passed"
+                and "體育" in course.get("specialization", "")
             ):
-                score_pe_class += course["credits_up"]
+                score_pe_class += course.get("credits_up", 0)
 
         # =========================
         # 畢業學分要求
         # =========================
-        credits = requiredCourses["credits"]
+        credits = (requiredCourses.get("credits", {})
+                   if isinstance(requiredCourses, dict) and "credits" in requiredCourses
+                   else {})
 
-        total_credit = credits["total"]              # 128
-        required = credits["required"]               # 90
-        elective_min = credits["elective_min"]       # 18
+        total_credit = credits.get("total", 128)
+        required = credits.get("required", 90)
+        elective_min = credits.get("elective_min", 18)
 
         other_elective_min = total_credit - required - elective_min
-        # 128 - 90 - 18 = 20
 
-        # AllGrades 的總學分包含體育
-        # 體育不算畢業學分，所以扣掉
-        real_credit = (
-            AllGrades["total_earned_credits"]
-            - score_pe_class
-        )
+        # AllGrades 的總學分包含體育，不計入畢業學分，扣掉
+        total_earned = AllGrades.get("total_earned_credits", 0) if isinstance(AllGrades, dict) else 0
+        real_credit = total_earned - score_pe_class
 
         return {
-            # =========================
-            # 已取得
-            # =========================
             "total_credit": real_credit,
             "required_credit": requiredScore,
             "elective_credit": electiveScore,
             "other_elective_credit": otherElectiveScore,
-
-            # =========================
-            # 尚缺
-            # =========================
-            "total_need": max(
-                0,
-                total_credit - real_credit
-            ),
-
-            "required_need": max(
-                0,
-                required - requiredScore
-            ),
-
-            "elective_need": max(
-                0,
-                elective_min - electiveScore
-            ),
-
-            "other_elective_need": max(
-                0,
-                other_elective_min - otherElectiveScore
-            ),
-
-            # =========================
-            # 畢業要求
-            # =========================
+            "total_need": max(0, total_credit - real_credit),
+            "required_need": max(0, required - requiredScore),
+            "elective_need": max(0, elective_min - electiveScore),
+            "other_elective_need": max(0, other_elective_min - otherElectiveScore),
             "total_required": total_credit,
             "required_total": required,
             "elective_total": elective_min,
             "other_elective_total": other_elective_min,
         }
-    
+
     def update_all_user_data(self):
         self.student_info(withUpdate=True)
         self.all_years_course_grades(withUpdate=True)
@@ -242,30 +236,29 @@ class UI_Api:
         self.missing_required_courses(withUpdate=True)
         self.course_selection_by_course_code(withUpdate=True)
         self.courses_we_have_this_semester(withUpdate=True)
-
         return {"done": True}
-        
+
     def student_info(self, withUpdate=False):
         return self._data(
             "student_info.json",
             "get_student_info",
             withUpdate
         )
-    
+
     def study_progress_info(self, withUpdate=False):
         return self._data(
             "study_progress.json",
             "get_study_progress_info",
             withUpdate
         )
-    
+
     def required_courses_and_graduation_credits(self, withUpdate=False):
         return self._data(
             "requiredCourses.json",
             "get_required_courses_and_graduation_credits",
             withUpdate
         )
-        
+
     def all_years_course_grades(self, withUpdate=False):
         return self._data(
             "AllGrades.json",
@@ -304,8 +297,7 @@ class UI_Api:
                 except Exception:
                     # Fallback to urllib with SSL context handling
                     try:
-                        import certifi
-                        ctx = ssl.create_default_context(cafile=certifi.where())
+                        ctx = ssl.create_default_context(cafile=requests.certs.where())
                     except Exception:
                         ctx = ssl.create_default_context()
                     try:
@@ -327,42 +319,39 @@ class UI_Api:
             return get_storage_data("courses.json")
 
     def schedule_my_class(self, schedule_data=None):
-        """
-        this function allow user add or remove class from their planing schedule
-        schedule_data should be a dict with keys: "options" (add/remove), "course_code" (for add), "course_id" (for remove)
-        example: {"options": "remove", "course_id": "12345"}
-        """
         data = get_storage_data("my_class.json")
-        if data is None:
-            data = {}
+        if data is None or not isinstance(data, list):
+            data = []
 
         if schedule_data is None:
             return data
-        
-        if "options" in schedule_data:
-            # Process the schedule data
-            if  schedule_data["options"] == "add":
-                modified_class = self.find_class_by_course_code(schedule_data["course_id"])
+
+        if isinstance(schedule_data, dict) and "options" in schedule_data:
+            option = schedule_data.get("options")
+            course_id = schedule_data.get("course_id")
+
+            if option == "add" and course_id:
+                modified_class = self.find_class_by_course_code(course_id)
                 if modified_class:
                     data.append(modified_class)
-
-            elif schedule_data["options"] == "remove":
-                data = [cls for cls in data if cls["course_id"] != schedule_data["course_id"]]
-            elif schedule_data["options"] == "clear":
+            elif option == "remove" and course_id:
+                data = [cls for cls in data if cls.get("course_id") != course_id]
+            elif option == "clear":
                 data = []
-            elif schedule_data["options"] == "load":
+            elif option == "load":
                 data = self.course_selection_by_course_code()
-                
+                if not isinstance(data, list):
+                    data = []
+
             save_storage_data("my_class.json", data)
             return data
         else:
             return data
 
     def find_class_by_course_code(self, course_code):
-        """
-        Find a course by course code and map it to the normalized format.
-        """
         data = get_storage_data("courses.json")
+        if not isinstance(data, list):
+            return None
 
         for course in data:
             if course.get("seq") == course_code:
@@ -383,12 +372,13 @@ class UI_Api:
                         else []
                     ),
                     "schedule": normalize_schedule(course.get("times", [])),
-                    "seat_numbers": [],  # Source data doesn't contain seat information.
+                    "seat_numbers": [],
                 }
-
         return None
-    
-    def search_courses(self, options):
+
+    def search_courses(self, options=None):
+        if not options:
+            options = {}
 
         title = options.get("title", "").lower()
         times = options.get("times", "").replace(" ", "")
@@ -396,187 +386,279 @@ class UI_Api:
         dept = options.get("dept_block", "").lower()
 
         result = []
-
         for course in self.courses:
-
-            if title:
-                if title not in course["title"].lower():
-                    continue
-
-            if required:
-                if course["required"] != required:
-                    continue
-
-            if dept:
-                if dept not in course["dept_block"].lower():
-                    continue
-
+            if title and title not in course.get("title", "").lower():
+                continue
+            if required and course.get("required") != required:
+                continue
+            if dept and dept not in course.get("dept_block", "").lower():
+                continue
             if times:
-                course_time = "".join(course["times"]).replace(" ", "")
+                course_time = "".join(course.get("times", [])).replace(" ", "")
                 if times not in course_time:
                     continue
-
             result.append(course)
-
         return result
 
     def auth_login(self):
         global AUTH, API
-        with open(SESSION_FILE, "r") as f:
-            data = json.load(f)
-            username = data["username"]
-            password = data["password"]
+        if not os.path.exists(SESSION_FILE):
+            return None
         try:
+            with open(SESSION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                username = data.get("username")
+                password = data.get("password")
+            if not username or not password:
+                return None
             AUTH = Authenticator(username=username, password=password)
-            if AUTH.perform_auth() == False:
+            if AUTH.perform_auth() is False:
                 raise RuntimeError("Authentication failed")
             API = EMISStudentAPI(AUTH.session)
             return API
-        except Exception:
+        except Exception as e:
+            print(f"Auth login error: {e}")
             self.logout()
-            sys.exit(0)
+            return None
 
     def check_saved_session(self):
-            """Called automatically on app launch to check if user is logged in."""
-            if os.path.exists(SESSION_FILE):
-                try:
-                    with open(SESSION_FILE, "r") as f:
-                        data = json.load(f)
-                        if data["loginPass"] == True:
-                            return {"logged_in": True, "username": data["username"]}
-                except Exception:
-                    pass
-            return {"logged_in": False}
+        if os.path.exists(SESSION_FILE):
+            try:
+                with open(SESSION_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if data.get("loginPass") is True:
+                        return {"logged_in": True, "username": data.get("username", "")}
+            except Exception:
+                pass
+        return {"logged_in": False}
 
     def authenticate(self, username, password):
-        """Validates credentials and saves session if valid."""
         global AUTH, API
-        auth = Authenticator(username=username, password=password)
-
-        if auth.perform_auth() != False:
-            AUTH = auth
-            API = EMISStudentAPI(AUTH.session)
-            session_data = {
-                "loginPass": True,
-                "username": username,
-                "password": password,
-            }
-
-            # Save session to file
-            with open(SESSION_FILE, "w") as f:
-                json.dump(session_data, f)
-            return True
+        try:
+            auth = Authenticator(username=username, password=password)
+            if auth.perform_auth() is not False:
+                AUTH = auth
+                API = EMISStudentAPI(AUTH.session)
+                session_data = {
+                    "loginPass": True,
+                    "username": username,
+                    "password": password,
+                }
+                with open(SESSION_FILE, "w", encoding="utf-8") as f:
+                    json.dump(session_data, f)
+                return True
+        except Exception as e:
+            print(f"Authentication error: {e}")
         return False
 
     def logout(self):
-        """Deletes saved session file on logout."""
+        global AUTH, API
+        AUTH = None
+        API = None
         if os.path.exists(SESSION_FILE):
-            os.remove(SESSION_FILE)
+            try:
+                os.remove(SESSION_FILE)
+            except Exception:
+                pass
         return True
 
 
-def normalize_schedule(schedule):
-    normalized = []
+GUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gui')
 
-    for item in schedule:
-        parts = [p.strip() for p in item.split("/")]
+try:
+    from flask import Flask, request, jsonify, send_from_directory
+    HAVE_FLASK = True
+except ImportError:
+    HAVE_FLASK = False
 
-        if len(parts) >= 3:
-            day, periods, room = parts[:3]
+try:
+    from bottle import Bottle, request as bottle_request, response as bottle_response, static_file
+    HAVE_BOTTLE = True
+except ImportError:
+    HAVE_BOTTLE = False
 
-            # Pad every period to 2 digits
-            periods = ",".join(f"{int(p):02d}" for p in periods.split(","))
 
-            # Normalize room spacing
-            room = re.sub(r"([A-Z])\s+(\d+)", r"\1  \2", room)
+def create_app(api_instance=None):
+    if api_instance is None:
+        api_instance = UI_Api()
 
-            item = f"{day} / {periods} / {room}"
+    if HAVE_FLASK:
+        app = Flask(__name__, static_folder=GUI_DIR, static_url_path='')
 
-        normalized.append(item)
+        @app.route('/')
+        def serve_index():
+            return send_from_directory(GUI_DIR, 'index.html')
 
-    return normalized
+        @app.route('/<path:path>')
+        def serve_static(path):
+            return send_from_directory(GUI_DIR, path)
 
-def notify_user_and_exit(title, message, win_url=None):
-    os_type = platform.system()
+        @app.route('/api/check_saved_session', methods=['GET'])
+        def api_check_saved_session():
+            return jsonify(api_instance.check_saved_session())
 
-    if os_type == "Linux":
-        for cmd in [["zenity", "--error", f"--title={title}", f"--text={message}"],
-                    ["kdialog", "--error", message, "--title", title]]:
-            try:
-                subprocess.run(cmd, check=True)
-                break
-            except Exception:
-                pass
+        @app.route('/api/authenticate', methods=['POST'])
+        def api_authenticate():
+            data = request.get_json(silent=True) or {}
+            username = data.get('username', '')
+            password = data.get('password', '')
+            return jsonify(api_instance.authenticate(username, password))
 
-    elif os_type == "Windows":
-        ps_script = f'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms]::MessageBox::Show("{message}", "{title}")'
-        subprocess.run(["powershell", "-Command", ps_script])
-        if win_url:
-            import webbrowser
-            webbrowser.open(win_url)
+        @app.route('/api/logout', methods=['POST'])
+        def api_logout():
+            return jsonify(api_instance.logout())
 
-    sys.exit(1)
+        @app.route('/api/student_info', methods=['GET'])
+        def api_student_info():
+            with_update = request.args.get('withUpdate', 'false').lower() == 'true'
+            return jsonify(api_instance.student_info(withUpdate=with_update))
 
-def get_storage_data(fileName:str):
-    data = {}
-    if os.path.exists(".userData/"+fileName):
-        with open(".userData/"+fileName, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    return data
+        @app.route('/api/study_progress_info', methods=['GET'])
+        def api_study_progress_info():
+            with_update = request.args.get('withUpdate', 'false').lower() == 'true'
+            return jsonify(api_instance.study_progress_info(withUpdate=with_update))
 
-def save_storage_data(fileName:str,data):
-    if not os.path.exists(".userData"):
-        os.mkdir(".userData")
-    
-    with open(".userData/"+fileName, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+        @app.route('/api/required_courses_and_graduation_credits', methods=['GET'])
+        def api_required_courses_and_graduation_credits():
+            with_update = request.args.get('withUpdate', 'false').lower() == 'true'
+            return jsonify(api_instance.required_courses_and_graduation_credits(withUpdate=with_update))
 
-def show_native_error_dialog(message):
-    # Clean env so subprocesses use system libraries instead of PyInstaller's bundled libssl/libssh
-    clean_env = os.environ.copy()
-    clean_env.pop("LD_LIBRARY_PATH", None)
+        @app.route('/api/all_years_course_grades', methods=['GET'])
+        def api_all_years_course_grades():
+            with_update = request.args.get('withUpdate', 'false').lower() == 'true'
+            return jsonify(api_instance.all_years_course_grades(withUpdate=with_update))
 
-    # 1. Try zenity
-    try:
-        subprocess.run([
-            "zenity", "--error", 
-            "--title=Dependency Missing", 
-            f"--text={message}"
-        ], check=True, env=clean_env)
-        return
-    except Exception:
-        pass
+        @app.route('/api/missing_required_courses', methods=['GET'])
+        def api_missing_required_courses():
+            with_update = request.args.get('withUpdate', 'false').lower() == 'true'
+            return jsonify(api_instance.missing_required_courses(withUpdate=with_update))
 
-    # 2. Try kdialog
-    try:
-        subprocess.run([
-            "kdialog", "--error", message, 
-            "--title", "Dependency Missing"
-        ], check=True, env=clean_env)
-        return
-    except Exception:
-        pass
+        @app.route('/api/course_selection_by_course_code', methods=['GET'])
+        def api_course_selection_by_course_code():
+            with_update = request.args.get('withUpdate', 'false').lower() == 'true'
+            return jsonify(api_instance.course_selection_by_course_code(withUpdate=with_update))
+
+        @app.route('/api/courses_we_have_this_semester', methods=['GET'])
+        def api_courses_we_have_this_semester():
+            with_update = request.args.get('withUpdate', 'false').lower() == 'true'
+            return jsonify(api_instance.courses_we_have_this_semester(withUpdate=with_update))
+
+        @app.route('/api/get_score', methods=['GET'])
+        def api_get_score():
+            return jsonify(api_instance.get_score())
+
+        @app.route('/api/progress_on_graduation', methods=['GET'])
+        def api_progress_on_graduation():
+            return jsonify(api_instance.progress_on_graduation())
+
+        @app.route('/api/update_all_user_data', methods=['POST'])
+        def api_update_all_user_data():
+            return jsonify(api_instance.update_all_user_data())
+
+        @app.route('/api/schedule_my_class', methods=['POST'])
+        def api_schedule_my_class():
+            data = request.get_json(silent=True) or {}
+            return jsonify(api_instance.schedule_my_class(data))
+
+        @app.route('/api/search_courses', methods=['POST'])
+        def api_search_courses():
+            data = request.get_json(silent=True) or {}
+            return jsonify(api_instance.search_courses(data))
+
+        return app
+    else:
+        b_app = Bottle()
+
+        @b_app.route('/')
+        def b_index():
+            return static_file('index.html', root=GUI_DIR)
+
+        @b_app.route('/<path:path>')
+        def b_static(path):
+            return static_file(path, root=GUI_DIR)
+
+        def b_json(data):
+            bottle_response.content_type = 'application/json'
+            return json.dumps(data)
+
+        @b_app.route('/api/check_saved_session', method='GET')
+        def b_check_saved_session():
+            return b_json(api_instance.check_saved_session())
+
+        @b_app.route('/api/authenticate', method='POST')
+        def b_authenticate():
+            data = bottle_request.json or {}
+            return b_json(api_instance.authenticate(data.get('username', ''), data.get('password', '')))
+
+        @b_app.route('/api/logout', method='POST')
+        def b_logout():
+            return b_json(api_instance.logout())
+
+        @b_app.route('/api/student_info', method='GET')
+        def b_student_info():
+            with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
+            return b_json(api_instance.student_info(withUpdate=with_update))
+
+        @b_app.route('/api/study_progress_info', method='GET')
+        def b_study_progress_info():
+            with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
+            return b_json(api_instance.study_progress_info(withUpdate=with_update))
+
+        @b_app.route('/api/required_courses_and_graduation_credits', method='GET')
+        def b_required_courses_and_graduation_credits():
+            with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
+            return b_json(api_instance.required_courses_and_graduation_credits(withUpdate=with_update))
+
+        @b_app.route('/api/all_years_course_grades', method='GET')
+        def b_all_years_course_grades():
+            with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
+            return b_json(api_instance.all_years_course_grades(withUpdate=with_update))
+
+        @b_app.route('/api/missing_required_courses', method='GET')
+        def b_missing_required_courses():
+            with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
+            return b_json(api_instance.missing_required_courses(withUpdate=with_update))
+
+        @b_app.route('/api/course_selection_by_course_code', method='GET')
+        def b_course_selection_by_course_code():
+            with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
+            return b_json(api_instance.course_selection_by_course_code(withUpdate=with_update))
+
+        @b_app.route('/api/courses_we_have_this_semester', method='GET')
+        def b_courses_we_have_this_semester():
+            with_update = bottle_request.query.get('withUpdate', 'false').lower() == 'true'
+            return b_json(api_instance.courses_we_have_this_semester(withUpdate=with_update))
+
+        @b_app.route('/api/get_score', method='GET')
+        def b_get_score():
+            return b_json(api_instance.get_score())
+
+        @b_app.route('/api/progress_on_graduation', method='GET')
+        def b_progress_on_graduation():
+            return b_json(api_instance.progress_on_graduation())
+
+        @b_app.route('/api/update_all_user_data', method='POST')
+        def b_update_all_user_data():
+            return b_json(api_instance.update_all_user_data())
+
+        @b_app.route('/api/schedule_my_class', method='POST')
+        def b_schedule_my_class():
+            data = bottle_request.json or {}
+            return b_json(api_instance.schedule_my_class(data))
+
+        @b_app.route('/api/search_courses', method='POST')
+        def b_search_courses():
+            data = bottle_request.json or {}
+            return b_json(api_instance.search_courses(data))
+
+        return b_app
 
 
 if __name__ == '__main__':
-    api = UI_Api()
-    webview.create_window('TKU EMI Suckless', 'gui/index.html', js_api=api)
-    try:
-        webview.start()
-    except Exception as e:
-        if platform.system() == "Linux":
-            show_native_error_dialog(
-                "This app requires WebKitGTK or Qt to run.\n"
-                "Please install it using your system package manager:\n\n"
-                "• Ubuntu/Debian: sudo apt install libwebkit2gtk-4.0-0\n"
-                "• Fedora: sudo dnf install webkit2gtk3\n"
-                "• Arch Linux: sudo pacman -S webkit2gtk"
-            )
-        elif platform.system() == "Windows":
-            notify_user_and_exit(
-                "WebView2 Required",
-                "Microsoft Edge WebView2 is required to run this application.",
-                win_url="https://developer.microsoft.com/en-us/microsoft-edge/webview2/"
-            )
-        else:
-            notify_user_and_exit("Startup Error", f"Failed to start app: {e}")
+    port = int(os.environ.get('PORT', 5000))
+    host = os.environ.get('HOST', '0.0.0.0')
+    app = create_app()
+    if HAVE_FLASK:
+        app.run(host=host, port=port, debug=False)
+    else:
+        app.run(host=host, port=port)
